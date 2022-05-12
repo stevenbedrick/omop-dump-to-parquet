@@ -26,10 +26,11 @@ conn = cx_Oracle.connect(
 )
 
 #sql = "select count(1) from PERSON"
-to_fetch = 10000
-sql = f"select * from NOTE fetch first :how_many rows only"
+to_fetch = 100_000
+sql = f"select * from NOTE order by person_id asc fetch first :how_many rows only"
 
-chunk_size = 512
+chunk_size = 2048 # how many rows to grab at once from Oracle
+pa_row_group_size = 2**15 # how big should each PQ row group be?
 
 # https://cx-oracle.readthedocs.io/en/latest/user_guide/lob_data.html
 def output_type_handler(cursor, name, default_type, size, precision, scale):
@@ -52,60 +53,89 @@ with conn.cursor() as cursor:
 
 
 curr_table = None
+curr_rb = None
 
-writer = None
 
-with conn.cursor() as cursor:
-    conn.outputtypehandler = output_type_handler # to deal with the CLOB column
+def load_notes(n_notes: int, progress_callback = None):
+    sql = f"select * from NOTE order by person_id asc fetch first :how_many rows only"
 
-    cursor.execute(sql, {'how_many': to_fetch}) # note parameterized query
+    with conn.cursor() as cursor:
+        conn.outputtypehandler = output_type_handler # to deal with the CLOB column
 
-    # https://cx-oracle.readthedocs.io/en/latest/user_guide/sql_execution.html#changing-query-results-with-rowfactories
-    col_names = [col[0] for col in cursor.description]
-    cursor.rowfactory = lambda *args: dict(zip(col_names, args))
+        cursor.execute(sql, {'how_many': n_notes}) # note parameterized query
 
-    with tqdm(total=to_fetch) as pbar:
-
-        iter_count = 0
+        # https://cx-oracle.readthedocs.io/en/latest/user_guide/sql_execution.html#changing-query-results-with-rowfactories
+        col_names = [col[0] for col in cursor.description]
+        cursor.rowfactory = lambda *args: dict(zip(col_names, args))
 
         while True:
             rows = cursor.fetchmany(chunk_size)
             if rows is None or len(rows) == 0:
-                break
-            pbar.update(len(rows))
-            iter_count += 1
+                return
+            if progress_callback:
+                progress_callback(len(rows))
+            yield rows
 
-            # convert to dataframe
-            as_df = pd.DataFrame(rows)
-            as_table = pa.Table.from_pandas(as_df, preserve_index=False)
+data_buffer = []
 
-            if curr_table is None:
-                curr_table = as_table
+def schema_from_table() -> pa.Schema:
+    # query a couple of rows from Oracle, use them to make a new dataframe,
+    # then make an Arrow table, and then return the schema
+    sql = f"select * from NOTE fetch first 10 rows only"
+
+    with conn.cursor() as cursor:
+        conn.outputtypehandler = output_type_handler  # to deal with the CLOB column
+
+        cursor.execute(sql)  # note parameterized query
+
+        # https://cx-oracle.readthedocs.io/en/latest/user_guide/sql_execution.html#changing-query-results-with-rowfactories
+        col_names = [col[0] for col in cursor.description]
+        cursor.rowfactory = lambda *args: dict(zip(col_names, args))
+
+        rows = cursor.fetchall()
+
+        if rows is None or len(rows) == 0:
+            raise Exception("Trouble pulling one row to initialize schema")
+        as_df = pd.DataFrame(rows)
+        as_pa = pa.Table.from_pandas(as_df, preserve_index=False)
+        return as_pa.schema
+
+
+def flush_buffer(writer_obj: pq.ParquetWriter, buffer):
+    as_df = pd.DataFrame(buffer)
+    as_rb = pa.RecordBatch.from_pandas(as_df, preserve_index=False)
+    writer_obj.write_batch(as_rb)
+
+
+with pq.ParquetWriter(
+                    "/data/bedricks/omop_pq_output/rdw_rls_notes.parquet",
+                    schema_from_table(),
+                    compression="gzip"
+                ) as writer:
+
+
+    with tqdm(total=to_fetch) as pbar:
+
+        def pbar_cb(n):
+            pbar.update(n)
+
+        for idx, rows in enumerate(load_notes(to_fetch, progress_callback=pbar_cb)):
+
+            if len(data_buffer) < pa_row_group_size:
+                data_buffer.extend(rows)
+                continue
             else:
-                curr_table = pa.concat_tables([curr_table, as_table])
+                # time to flush existing data:
+                flush_buffer(writer, data_buffer)
 
+                # and get set up for next time:
+                data_buffer = rows
 
-            if iter_count > 0 and iter_count % 5 == 0:
-                pbar.write(f"At iter {iter_count}, about to write {len(curr_table)} rows.")
-                if writer is None:
-                    writer = pq.ParquetWriter("/data/bedricks/omop_pq_output/rdw_rls_notes.parquet", curr_table.schema)
-                writer.write_table(curr_table)
-                curr_table = None
+    if len(data_buffer) > 0:
+        flush_buffer(writer, data_buffer)
 
-
-            # print(rows[0])
-            # tqdm.write(str(rows[0][1]))
-
-if writer is not None:
-    if curr_table is not None:
-        print(f"flushing {len(curr_table)} records")
-        writer.write_table(curr_table)
-    print("closing")
-    writer.close()
-else:
-    print("writer is None?")
 
 # try reading back in
 z = pq.read_table("/data/bedricks/omop_pq_output/rdw_rls_notes.parquet")
 print(z.schema)
-print(len(z))
+print("total size: ", z.num_rows)

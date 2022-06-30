@@ -1,9 +1,14 @@
 import cx_Oracle
 from tqdm import tqdm
+
 import pyarrow.parquet as pq
 import pyarrow as pa
 import os, sys
 import pandas as pd
+import logging
+from tqdm.contrib.logging import logging_redirect_tqdm
+
+logging.basicConfig(level=logging.INFO)
 
 if sys.platform == "darwin":
     cx_Oracle.init_oracle_client(lib_dir="/opt/oracle/instantclient_19_8")
@@ -26,11 +31,15 @@ conn = cx_Oracle.connect(
 )
 
 #sql = "select count(1) from PERSON"
-to_fetch = 100_000
-sql = f"select * from NOTE order by person_id asc fetch first :how_many rows only"
+to_fetch = 1_000_000
+sql = f"select * from NOTE fetch first :how_many rows only"
 
+rows_per_pq_file = 2**20 # about 1M
+# rows_per_pq_file = 2**18
 chunk_size = 2048 # how many rows to grab at once from Oracle
 pa_row_group_size = 2**15 # how big should each PQ row group be?
+#pa_page_size = 2**10 * 2**10 * 4
+pa_page_size = 2**10 * 2**10
 
 # https://cx-oracle.readthedocs.io/en/latest/user_guide/lob_data.html
 def output_type_handler(cursor, name, default_type, size, precision, scale):
@@ -46,9 +55,9 @@ with conn.cursor() as cursor:
     rows = cursor.fetchone()
     if rows and len(rows) == 1:
         n_persons = rows[0]
-        print(f"Dumping notes for {n_persons} patients...")
+        logging.info(f"Dumping notes for {n_persons} patients...")
     else:
-        print("Couldn't complete person count; bailing out!")
+        logging.error("Couldn't complete person count; bailing out!")
         sys.exit(1)
 
 
@@ -57,7 +66,7 @@ curr_rb = None
 
 
 def load_notes(n_notes: int, progress_callback = None):
-    sql = f"select * from NOTE order by person_id asc fetch first :how_many rows only"
+    sql = f"select * from NOTE fetch first :how_many rows only"
 
     with conn.cursor() as cursor:
         conn.outputtypehandler = output_type_handler # to deal with the CLOB column
@@ -97,45 +106,63 @@ def schema_from_table() -> pa.Schema:
         if rows is None or len(rows) == 0:
             raise Exception("Trouble pulling one row to initialize schema")
         as_df = pd.DataFrame(rows)
+        # If we don't do this next part, any Nulls in the database will propagate through to turn this into a floating-point column
+        as_df.PROVIDER_ID = as_df.PROVIDER_ID.astype("Int64") # https://pandas.pydata.org/docs/user_guide/integer_na.html
         as_pa = pa.Table.from_pandas(as_df, preserve_index=False)
         return as_pa.schema
 
 
-def flush_buffer(writer_obj: pq.ParquetWriter, buffer):
+def flush_buffer_to_writer(writer_obj: pq.ParquetWriter, buffer):
     as_df = pd.DataFrame(buffer)
+    as_df.PROVIDER_ID = as_df.PROVIDER_ID.astype("Int64")  # https://pandas.pydata.org/docs/user_guide/integer_na.html
     as_rb = pa.RecordBatch.from_pandas(as_df, preserve_index=False)
     writer_obj.write_batch(as_rb)
 
 
-with pq.ParquetWriter(
-                    "/data/bedricks/omop_pq_output/rdw_rls_notes.parquet",
-                    schema_from_table(),
-                    compression="gzip"
-                ) as writer:
+#outfile_path = "/data/bedricks/omop_pq_output/"
+outfile_path = "/Users/bedricks/Documents/Mayo R01 PHI/pq_files/"
+filename_template = "rdw_rls_notes.{}.parquet"
+
+def flush_buffer_to_table(output_path: str, buffer, schema_to_use):
+    logging.info(f"Writing to {output_path}")
+    as_df = pd.DataFrame(buffer)
+    as_df.PROVIDER_ID = as_df.PROVIDER_ID.astype("Int64")  # https://pandas.pydata.org/docs/user_guide/integer_na.html
+    as_tb = pa.Table.from_pandas(as_df, schema=schema_to_use, preserve_index=False)
+    pq.write_table(as_tb, output_path)
 
 
-    with tqdm(total=to_fetch) as pbar:
+shard_count = 0
 
-        def pbar_cb(n):
-            pbar.update(n)
+our_schema = schema_from_table()
 
-        for idx, rows in enumerate(load_notes(to_fetch, progress_callback=pbar_cb)):
+with tqdm(total=to_fetch) as pbar, logging_redirect_tqdm():
 
-            if len(data_buffer) < pa_row_group_size:
-                data_buffer.extend(rows)
-                continue
-            else:
-                # time to flush existing data:
-                flush_buffer(writer, data_buffer)
+    def pbar_cb(n):
+        pbar.update(n)
 
-                # and get set up for next time:
-                data_buffer = rows
+    for idx, rows in enumerate(load_notes(to_fetch, progress_callback=pbar_cb)):
 
-    if len(data_buffer) > 0:
-        flush_buffer(writer, data_buffer)
+        #if len(data_buffer) < pa_row_group_size:
+        if len(data_buffer) < rows_per_pq_file:
+            data_buffer.extend(rows)
+            continue
+        else:
+            # time to flush existing data:
+            path_to_write = os.path.join(outfile_path, filename_template.format(shard_count))
+            flush_buffer_to_table(path_to_write, data_buffer, our_schema)
+            shard_count += 1
+
+            # and get set up for next time:
+            data_buffer = rows
+
+if len(data_buffer) > 0:
+    path_to_write = os.path.join(outfile_path, filename_template.format(shard_count))
+    flush_buffer_to_table(path_to_write, data_buffer, our_schema)
+
 
 
 # try reading back in
-z = pq.read_table("/data/bedricks/omop_pq_output/rdw_rls_notes.parquet")
+path_to_read = outfile_path # it'll be a directory of PQ files, and we can open that directly
+z = pq.read_table(outfile_path)
 print(z.schema)
-print("total size: ", z.num_rows)
+logging.info(f"total size: {z.num_rows}")

@@ -119,7 +119,7 @@ def flush_buffer_to_writer(writer_obj: pq.ParquetWriter, buffer):
     writer_obj.write_batch(as_rb)
 
 
-#outfile_path = "/data/bedricks/omop_pq_output/"
+#outfile_path = "/data/bedricks/omop_pq_output/notes/"
 outfile_path = "/Users/bedricks/Documents/Mayo R01 PHI/pq_files/"
 filename_template = "rdw_rls_notes.{}.parquet"
 

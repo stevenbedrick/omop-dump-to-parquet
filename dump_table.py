@@ -31,7 +31,7 @@ conn = cx_Oracle.connect(
 )
 
 #sql = "select count(1) from PERSON"
-to_fetch = 1_000_000
+to_fetch = 50_000
 sql = f"select * from NOTE fetch first :how_many rows only"
 
 rows_per_pq_file = 2**20 # about 1M
@@ -58,6 +58,16 @@ with conn.cursor() as cursor:
         logging.info(f"Dumping notes for {n_persons} patients...")
     else:
         logging.error("Couldn't complete person count; bailing out!")
+        sys.exit(1)
+
+    query = "select count(1) from note"
+    cursor.execute(query)
+    rows = cursor.fetchone()
+    if rows and len(rows) == 1:
+        n_notes = rows[0]
+        logging.info(f"Total notes in table: {n_notes}")
+    else:
+        logging.error("Couldn't compute note count, bailing out!")
         sys.exit(1)
 
 

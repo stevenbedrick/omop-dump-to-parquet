@@ -8,7 +8,7 @@ import pandas as pd
 import logging
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 if sys.platform == "darwin":
     cx_Oracle.init_oracle_client(lib_dir="/opt/oracle/instantclient_19_8")
@@ -34,8 +34,7 @@ conn = cx_Oracle.connect(
 to_fetch = 50_000
 sql = f"select * from NOTE fetch first :how_many rows only"
 
-rows_per_pq_file = 2**20 # about 1M
-# rows_per_pq_file = 2**18
+rows_per_pq_file = 2**19 # about 500k-ish 
 chunk_size = 2048 # how many rows to grab at once from Oracle
 pa_row_group_size = 2**15 # how big should each PQ row group be?
 #pa_page_size = 2**10 * 2**10 * 4
@@ -76,13 +75,13 @@ curr_rb = None
 
 
 def load_notes(n_notes: int, progress_callback = None):
-    sql = f"select * from NOTE fetch first :how_many rows only"
+    sql = f"select * from NOTE"# fetch first :how_many rows only"
 
     with conn.cursor() as cursor:
         conn.outputtypehandler = output_type_handler # to deal with the CLOB column
 
-        cursor.execute(sql, {'how_many': n_notes}) # note parameterized query
-
+#        cursor.execute(sql, {'how_many': n_notes}) # note parameterized query
+        cursor.execute(sql)
         # https://cx-oracle.readthedocs.io/en/latest/user_guide/sql_execution.html#changing-query-results-with-rowfactories
         col_names = [col[0] for col in cursor.description]
         cursor.rowfactory = lambda *args: dict(zip(col_names, args))
@@ -129,23 +128,30 @@ def flush_buffer_to_writer(writer_obj: pq.ParquetWriter, buffer):
     writer_obj.write_batch(as_rb)
 
 
-#outfile_path = "/data/bedricks/omop_pq_output/notes/"
-outfile_path = "/Users/bedricks/Documents/Mayo R01 PHI/pq_files/"
+outfile_path = "/data/bedricks/omop_pq_output/notes/"
+#outfile_path = "/Users/bedricks/Documents/Mayo R01 PHI/pq_files/"
 filename_template = "rdw_rls_notes.{}.parquet"
 
 def flush_buffer_to_table(output_path: str, buffer, schema_to_use):
     logging.info(f"Writing to {output_path}")
+
+    logging.debug("About to convert to dataframe")
     as_df = pd.DataFrame(buffer)
     as_df.PROVIDER_ID = as_df.PROVIDER_ID.astype("Int64")  # https://pandas.pydata.org/docs/user_guide/integer_na.html
+
+    logging.debug("About to make Table")
     as_tb = pa.Table.from_pandas(as_df, schema=schema_to_use, preserve_index=False)
+
+    logging.debug("About to write table")
     pq.write_table(as_tb, output_path)
+
 
 
 shard_count = 0
 
 our_schema = schema_from_table()
 
-with tqdm(total=to_fetch) as pbar, logging_redirect_tqdm():
+with tqdm(total=n_notes) as pbar, logging_redirect_tqdm():
 
     def pbar_cb(n):
         pbar.update(n)

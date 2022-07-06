@@ -124,7 +124,7 @@ outfile_path = "/Users/bedricks/Documents/Mayo R01 PHI/pq_files/"
 filename_template = "rdw_rls_notes.{}.parquet"
 
 
-def flush_buffer_to_table(output_path: str, buffer, schema_to_use):
+def flush_buffer_to_table(output_path: str, buffer, schema_to_use, rg_size):
     logging.info(f"Writing to {output_path}")
 
     logging.debug("About to convert to dataframe")
@@ -135,18 +135,21 @@ def flush_buffer_to_table(output_path: str, buffer, schema_to_use):
     as_tb = pa.Table.from_pandas(as_df, schema=schema_to_use, preserve_index=False)
 
     logging.debug("About to write table")
-    pq.write_table(as_tb, output_path)
+    pq.write_table(as_tb, output_path, row_group_size=rg_size)
 
 
 def main():
-    GRAB_EVERYTHING = False
+    GRAB_EVERYTHING = False # set me to True in order to download all notes...
 
-    to_fetch = 150_000
+    to_fetch = 2_000_000
 
-    # rows_per_pq_file = 2 ** 19  # about 500k-ish
-    rows_per_pq_file = 2 ** 15  # 32K
+    rows_per_pq_file = 2 ** 19  # about 500k-ish
+    # rows_per_pq_file = 2 ** 15  # 32K, for testing
     chunk_size = 2048  # how many rows to grab at once from Oracle
-    pa_row_group_size = 2 ** 15  # how big should each PQ row group be?
+
+    # if we're going with batches of 500k, should end up with 4 or so row groups per file
+    pa_row_group_size = 2 ** 17  # how big should each PQ row group be?
+
     # pa_page_size = 2**10 * 2**10 * 4
     pa_page_size = 2 ** 10 * 2 ** 10
 
@@ -177,7 +180,7 @@ def main():
             else:
                 # time to flush existing data:
                 path_to_write = os.path.join(outfile_path, filename_template.format(shard_count))
-                flush_buffer_to_table(path_to_write, data_buffer, our_schema)
+                flush_buffer_to_table(path_to_write, data_buffer, our_schema, pa_row_group_size)
                 shard_count += 1
 
                 # and get set up for next time:
@@ -188,7 +191,7 @@ def main():
     if len(data_buffer) > 0:
         logging.info(f"{len(data_buffer)} records in buffer, flushing")
         path_to_write = os.path.join(outfile_path, filename_template.format(shard_count))
-        flush_buffer_to_table(path_to_write, data_buffer, our_schema)
+        flush_buffer_to_table(path_to_write, data_buffer, our_schema, pa_row_group_size)
 
     logging.info("Now to read back in...")
 

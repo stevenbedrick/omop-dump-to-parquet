@@ -2,3 +2,4 @@ tqdm
 pyarrow
 cx_Oracle
 pandas
+python-dotenv

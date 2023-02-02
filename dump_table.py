@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import cx_Oracle
 from tqdm import tqdm
 
@@ -10,22 +11,28 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 logging.basicConfig(level=logging.DEBUG)
 
+load_dotenv()
+
 if sys.platform == "darwin":
     cx_Oracle.init_oracle_client(lib_dir="/opt/oracle/instantclient_19_8")
 
-dsn = """
+oracle_host = os.getenv("ORACLE_HOST")
+oracle_port = os.getenv("ORACLE_PORT")
+oracle_sid = os.getenv("ORACLE_SID")
+
+dsn = f"""
 (DESCRIPTION =
     (ADDRESS_LIST =
-      (ADDRESS = (PROTOCOL = TCP)(HOST = octriusrdblxd1.ohsu.edu )(PORT = 1515))
+      (ADDRESS = (PROTOCOL = TCP)(HOST = {oracle_host} )(PORT = {oracle_port}))
     )
     (CONNECT_DATA =
-      (SID = OCTRIUSR)
+      (SID = {oracle_sid})
     )
   )
 """
 
 conn = cx_Oracle.connect(
-    user="RDW_RLS_COHORT_TEXT",
+    user=os.getenv("ORACLE_USER"),
     password=os.getenv("RDW_PASS"),
     dsn=dsn
 )

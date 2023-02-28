@@ -19,6 +19,11 @@ if sys.platform == "darwin":
 oracle_host = os.getenv("ORACLE_HOST")
 oracle_port = os.getenv("ORACLE_PORT")
 oracle_sid = os.getenv("ORACLE_SID")
+GRAB_EVERYTHING = False # set me to True in order to download all notes...
+if os.getenv("GRAB_EVERYTHING"):
+    GRAB_EVERYTHING = True
+
+DEFAULT_N_TO_FETCH = 2_000_000 # How many records to pull by default?
 
 dsn = f"""
 (DESCRIPTION =
@@ -146,9 +151,6 @@ def flush_buffer_to_table(output_path: str, buffer, schema_to_use, rg_size):
 
 
 def main():
-    GRAB_EVERYTHING = False # set me to True in order to download all notes...
-
-    to_fetch = 2_000_000
 
     rows_per_pq_file = 2 ** 19  # about 500k-ish
     # rows_per_pq_file = 2 ** 15  # 32K, for testing
@@ -162,8 +164,11 @@ def main():
 
     n_persons, n_notes = get_counts()
 
+    to_fetch = DEFAULT_N_TO_FETCH
+
     if GRAB_EVERYTHING:
         to_fetch = n_notes
+
 
 
     shard_count = 0

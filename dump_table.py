@@ -9,6 +9,8 @@ import pandas as pd
 import logging
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+import click
+
 logging.basicConfig(level=logging.DEBUG)
 
 load_dotenv()
@@ -151,10 +153,8 @@ def flush_buffer_to_writer(writer_obj: pq.ParquetWriter, buffer):
     as_rb = pa.RecordBatch.from_pandas(as_df, preserve_index=False)
     writer_obj.write_batch(as_rb)
 
-
-# outfile_path = "/data/bedricks/omop_pq_output/notes/"
-outfile_path = "/Users/bedricks/Documents/Mayo R01 PHI/pq_files/"
-filename_template = "rdw_rls_notes.{}.parquet"
+# TODO: Make this not hard-coded!!
+filename_template = "omop_notes.{}.parquet"
 
 
 def flush_buffer_to_table(output_path: str, buffer, schema_to_use, rg_size):
@@ -171,7 +171,13 @@ def flush_buffer_to_table(output_path: str, buffer, schema_to_use, rg_size):
     pq.write_table(as_tb, output_path, row_group_size=rg_size)
 
 
-def main():
+
+@click.command()
+@click.option('--output_path',
+                required=True,
+                type=click.Path(exists=True, dir_okay=True),
+                help="Directory in which to write the sharded Parquet files.")
+def main(output_path: str):
 
     rows_per_pq_file = 2 ** 19  # about 500k-ish
     # rows_per_pq_file = 2 ** 15  # 32K, for testing
@@ -212,7 +218,7 @@ def main():
                 continue
             else:
                 # time to flush existing data:
-                path_to_write = os.path.join(outfile_path, filename_template.format(shard_count))
+                path_to_write = os.path.join(output_path, filename_template.format(shard_count))
                 flush_buffer_to_table(path_to_write, data_buffer, our_schema, pa_row_group_size)
                 shard_count += 1
 
@@ -223,13 +229,13 @@ def main():
 
     if len(data_buffer) > 0:
         logging.info(f"{len(data_buffer)} records in buffer, flushing")
-        path_to_write = os.path.join(outfile_path, filename_template.format(shard_count))
+        path_to_write = os.path.join(output_path, filename_template.format(shard_count))
         flush_buffer_to_table(path_to_write, data_buffer, our_schema, pa_row_group_size)
 
     logging.info("Now to read back in...")
 
-    # try reading back in
-    path_to_read = outfile_path  # it'll be a directory of PQ files, and we can open that directly
+    # try reading back in as a sanity check
+    path_to_read = output_path  # it'll be a directory of PQ files, and we can open that directly
 
     z = pq.ParquetDataset(path_to_read, use_legacy_dataset=False)
     print(z.schema)

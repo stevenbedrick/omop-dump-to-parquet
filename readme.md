@@ -18,6 +18,10 @@ I've experimented a bit with different values for things like the Parquet page a
 
 - Depending on how your system is set up, you may need to set `LD_LIBRARY_PATH` to point to the Oracle drivers, like so:
   - `LD_LIBRARY_PATH="/opt/oracle/instantclient_21_6" python dump_table.py`
+  - Note that Macs handle this all a bit differently; I've got a check in `dump_table.py` somewhere around line 16 that you may need to adjust depending on exactly how you've installed the Mac Oracle drivers.
+    - Note further that as of Feb. 2023, Oracle has yet to release MacOS drivers for Apple Silicon (arm64), so your options are either:
+      - Find an Intel-based Mac, or Linux machine
+      - Try your luck with Rosetta - in principle, it would probably work to install an x86 version of Python, download the x86 Mac Oracle drivers, and try running it all that way.  
 - Make sure to set appropriate environment variables; via either:
   - by putting them in a `.env` file (preferred)
   - by hand (thought be mindful that you don't let passwords show up in shell history, etc., in case that's something you need to care about)

@@ -77,6 +77,18 @@ def get_counts():
 
 
 def load_notes(n_notes: int, chunk_size: int, progress_callback=None):
+    """
+    Generator function that runs a query to load up to n_notes, and then yields them in batches of chunk_size.
+
+    This is done in an efficient using an SQL cursor, so we do _not_ have to load n_notes into memory at once.
+
+    Optionally takes a callback function that will be called once per batch, for e.g. updating a progress bar or logging.
+
+    :param n_notes:
+    :param chunk_size:
+    :param progress_callback:
+    :return:
+    """
     sql = f"select * from NOTE fetch first :how_many rows only"
 
     with conn.cursor() as cursor:
@@ -100,8 +112,17 @@ def load_notes(n_notes: int, chunk_size: int, progress_callback=None):
 
 
 def schema_from_table() -> pa.Schema:
-    # query a couple of rows from Oracle, use them to make a new dataframe,
-    # then make an Arrow table, and then return the schema
+    """
+    Induce a pa.Schema object from the structure of the Note table.
+
+    1. Query a couple of rows of the Note table, use them to make a new Pandas dataframe (Panas automatically induces its schema)
+    2. Use pa.Table.from_pandas() to make an Arrow Table, which will inherit the Pandas schema
+    3. Return the new Table's schema object, so we can use it for our output file.
+
+    Note the business towards the end of the function with DataFrame.PROVIDER_ID;
+    this is a finicky detail involving nulls in the database propagating back badly,
+    and might be an Oracle-specific issue - YMMV.
+    """
     sql = f"select * from NOTE fetch first 10 rows only"
 
     with conn.cursor() as cursor:

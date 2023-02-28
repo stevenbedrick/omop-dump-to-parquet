@@ -27,7 +27,7 @@ I've experimented a bit with different values for things like the Parquet page a
   - `ORACLE_PORT`
   - `ORACLE_SID`
   - `ORACLE_USER`
-  - `RDW_PASS` (the password for `ORACLE_USER`)
+  - `ORACLE_PASS` (the password for `ORACLE_USER`)
 - Notice the `GRAB_EVERYTHING` environment (or `.env`) variable
   - By default, this script will attempt to pull down the first 2M notes, which is a large enough number to be interesting and find out if you've got bugs, but not so large that it will result in an unwieldy runtime
   - When you're ready to pull down the whole table, just set `GRAB_EVERYTHING` to `True`. 

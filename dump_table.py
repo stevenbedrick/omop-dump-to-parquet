@@ -38,7 +38,7 @@ dsn = f"""
 
 conn = cx_Oracle.connect(
     user=os.getenv("ORACLE_USER"),
-    password=os.getenv("RDW_PASS"),
+    password=os.getenv("ORACLE_PASS"),
     dsn=dsn
 )
 
